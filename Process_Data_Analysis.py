@@ -16,7 +16,7 @@ from fpdf import FPDF
 import xlsxwriter
 
 #st.set_option('deprecation.showPyplotGlobalUse', False)
-st.title("Advanced Process System Identification and Analysis")
+st.title("Advanced Process System Identification and Analysis (SISO)")
 
 # === Transformations ===
 def generate_transforms(X_df):
@@ -110,7 +110,7 @@ def run_analysis_with_relations(df, io_relations):
         if len(in_cols_for_output) == 0:
             st.warning(f"No inputs selected for output '{out_col}', skipping.")
             continue
-        st.markdown(f"### Modeling Output: **{out_col}** using Inputs: {in_cols_for_output}")
+        st.markdown(f"### Modeling Output: **{out_col}** using Input: {in_cols_for_output[0]}")
 
         transform_cols = []
         for in_col in in_cols_for_output:
@@ -175,7 +175,7 @@ def run_analysis_with_relations(df, io_relations):
     st.dataframe(df_results[['output', 'inputs', 'model', 'r2', 'mse', 'gain', 'order', 'delay_time', 'process_time', 'equation']])
 
     for r in results:
-        st.write(f"Output: {r['output']} — Model: {r['model']} — Inputs: {r['inputs']}")
+        st.write(f"Output: {r['output']} — Model: {r['model']} — Input: {r['inputs'][0]}")
         plt.figure(figsize=(10, 4))
         plt.plot(df.index, df[r['output']], label='Actual')
         plt.plot(df.index, r['y_pred'], '--', label='Predicted')
@@ -198,7 +198,7 @@ def create_pdf_report(results, df):
     pdf.set_font("Arial", size=12)
     for r in results:
         pdf.cell(0, 8, f"Output: {r['output']}", ln=1)
-        pdf.cell(0, 8, f"Inputs: {', '.join(r['inputs'])}", ln=1)
+        pdf.cell(0, 8, f"Input: {r['inputs'][0]}", ln=1)
         pdf.cell(0, 8, f"Model: {r['model']}", ln=1)
         pdf.cell(0, 8, f"R²: {r['r2']:.4f}, MSE: {r['mse']:.4f}, Gain: {r['gain']:.4f}", ln=1)
         pdf.cell(0, 8, f"Order: {r['order']}, Delay Time: {r['delay_time']:.2f}s, Process Time: {r['process_time']:.2f}s", ln=1)
@@ -226,13 +226,13 @@ def create_excel_report(results, df):
     workbook = xlsxwriter.Workbook(output)
     worksheet = workbook.add_worksheet("Summary")
 
-    headers = ["Output", "Inputs", "Model", "R2", "MSE", "Gain", "Order", "Delay Time (s)", "Process Time (s)", "Equation"]
+    headers = ["Output", "Input", "Model", "R2", "MSE", "Gain", "Order", "Delay Time (s)", "Process Time (s)", "Equation"]
     for col, header in enumerate(headers):
         worksheet.write(0, col, header)
 
     for row_num, r in enumerate(results, 1):
         worksheet.write(row_num, 0, r['output'])
-        worksheet.write(row_num, 1, ", ".join(r['inputs']))
+        worksheet.write(row_num, 1, r['inputs'][0])
         worksheet.write(row_num, 2, r['model'])
         worksheet.write(row_num, 3, r['r2'])
         worksheet.write(row_num, 4, r['mse'])
@@ -285,25 +285,18 @@ def main():
                 st.success("File loaded successfully!")
 
                 all_cols = list(df.columns)
-                st.sidebar.markdown("### Select Input Columns")
-                input_cols = st.sidebar.multiselect("Input columns", options=all_cols, default=all_cols[:1])
 
-                st.sidebar.markdown("### Select Output Columns")
-                output_cols = st.sidebar.multiselect("Output columns", options=all_cols, default=all_cols[1:2])
+                # Select single input
+                input_col = st.sidebar.selectbox("Select Input Column (Single)", options=all_cols)
 
-                if len(input_cols) == 0 or len(output_cols) == 0:
-                    st.warning("Please select at least one input and one output column.")
+                # Select single output
+                output_col = st.sidebar.selectbox("Select Output Column (Single)", options=all_cols)
+
+                if not input_col or not output_col:
+                    st.warning("Please select one input and one output column.")
                     return
 
-                st.sidebar.markdown("### Define Input-Output Relationships")
-                io_relations = {}
-                for out_col in output_cols:
-                    selected_inputs = st.sidebar.multiselect(
-                        f"Select input columns to model for output '{out_col}':",
-                        options=input_cols,
-                        default=input_cols
-                    )
-                    io_relations[out_col] = selected_inputs
+                io_relations = {output_col: [input_col]}
 
                 if st.button("Run Analysis"):
                     results, df = run_analysis_with_relations(df, io_relations)
@@ -324,6 +317,7 @@ def main():
 
     elif mode == "Simulated Real-time Data":
         st.write("Running simulated real-time streaming data...")
+
         total_points = st.sidebar.number_input("Total points", min_value=60, max_value=10000, value=1440)
         chunk_size = st.sidebar.number_input("Chunk size", min_value=10, max_value=1000, value=60)
 
@@ -349,6 +343,11 @@ def main():
 
         accumulated_df = pd.DataFrame()
         chunk_gen = simulate_realtime_data(total_points, chunk_size)
+
+        # Select single input and output for real-time mode (fixed for demo)
+        input_col = 'input1'
+        output_col = 'output1'
+
         for i, chunk in enumerate(chunk_gen, 1):
             st.write(f"Processing chunk {i} of {int(total_points / chunk_size)}...")
             accumulated_df = pd.concat([accumulated_df, chunk]).drop_duplicates(subset='timestamp').reset_index(drop=True)
@@ -358,14 +357,9 @@ def main():
             if len(accumulated_df) > max_points:
                 accumulated_df = accumulated_df.iloc[-max_points:]
 
-            input_cols = [c for c in accumulated_df.columns if c.lower().startswith('input')]
-            output_cols = [c for c in accumulated_df.columns if c.lower().startswith('output')]
-
-            io_relations = {out: input_cols for out in output_cols}
-
+            io_relations = {output_col: [input_col]}
             run_analysis_with_relations(accumulated_df, io_relations)
             time.sleep(1)
-
 
 if __name__ == "__main__":
     main()
