@@ -15,7 +15,6 @@ import io
 from fpdf import FPDF
 import xlsxwriter
 
-#st.set_option('deprecation.showPyplotGlobalUse', False)
 st.title("Advanced Process System Identification and Analysis (SISO)")
 
 # === Transformations ===
@@ -110,14 +109,16 @@ def run_analysis_with_relations(df, io_relations):
         if len(in_cols_for_output) == 0:
             st.warning(f"No inputs selected for output '{out_col}', skipping.")
             continue
-        st.markdown(f"### Modeling Output: **{out_col}** using Input: {in_cols_for_output[0]}")
 
-        transform_cols = []
-        for in_col in in_cols_for_output:
-            transform_cols += [c for c in X.columns if c.startswith(in_col + '_')]
+        # SISO: only one input per output, take the first input in the list
+        input_col = in_cols_for_output[0]
+        st.markdown(f"### Modeling Output: **{out_col}** using Input: **{input_col}**")
+
+        transform_cols = [c for c in X.columns if c.startswith(input_col + '_')]
         X_model = X[transform_cols].values
         y = df[out_col].values.reshape(-1, 1)
 
+        # Try polynomial models degree 1 to 3 + linear
         for degree in range(1, 4):
             poly = PolynomialFeatures(degree=degree)
             X_poly = poly.fit_transform(X_model)
@@ -132,7 +133,7 @@ def run_analysis_with_relations(df, io_relations):
 
             results.append({
                 'output': out_col,
-                'inputs': in_cols_for_output,
+                'inputs': [input_col],
                 'model': f'Polynomial Degree {degree}',
                 'r2': r2,
                 'mse': mse,
@@ -143,7 +144,6 @@ def run_analysis_with_relations(df, io_relations):
                 'process_time': dynamics['process_time'],
                 'y_pred': y_pred.flatten()
             })
-            st.write(f"Degree {degree}: R2={r2:.4f}, MSE={mse:.4f}, Gain={gain:.4f}")
 
         # Linear regression on transformed inputs for comparison
         lr = LinearRegression()
@@ -157,7 +157,7 @@ def run_analysis_with_relations(df, io_relations):
 
         results.append({
             'output': out_col,
-            'inputs': in_cols_for_output,
+            'inputs': [input_col],
             'model': 'Linear',
             'r2': r2,
             'mse': mse,
@@ -168,22 +168,35 @@ def run_analysis_with_relations(df, io_relations):
             'process_time': dynamics['process_time'],
             'y_pred': y_pred.flatten()
         })
-        st.write(f"Linear: R2={r2:.4f}, MSE={mse:.4f}, Gain={gain:.4f}")
+
+        # Select best model by highest R2
+        best_model = max([r for r in results if r['output'] == out_col], key=lambda x: x['r2'])
+
+        st.markdown("## Best Model Summary")
+        st.write(f"**Output:** {best_model['output']}")
+        st.write(f"**Input:** {best_model['inputs'][0]}")
+        st.write(f"**Model:** {best_model['model']}")
+        st.write(f"**R²:** {best_model['r2']:.4f}")
+        st.write(f"**MSE:** {best_model['mse']:.4f}")
+        st.write(f"**Gain:** {best_model['gain']:.4f}")
+        st.write(f"**Order:** {best_model['order']}")
+        st.write(f"**Delay Time (s):** {best_model['delay_time']:.2f}")
+        st.write(f"**Process Time (s):** {best_model['process_time']:.2f}")
+        st.write(f"**Equation:** {best_model['equation']}")
+
+        plt.figure(figsize=(10, 5))
+        plt.plot(df.index, df[out_col], label='Actual', linewidth=2)
+        plt.plot(df.index, best_model['y_pred'], '--', label='Predicted', linewidth=2)
+        plt.title(f"Best Model Fit: {best_model['model']}")
+        plt.xlabel('Time')
+        plt.ylabel(out_col)
+        plt.legend()
+        st.pyplot(plt)
+        plt.close()
 
     st.subheader("Summary of All Models")
     df_results = pd.DataFrame(results)
     st.dataframe(df_results[['output', 'inputs', 'model', 'r2', 'mse', 'gain', 'order', 'delay_time', 'process_time', 'equation']])
-
-    for r in results:
-        st.write(f"Output: {r['output']} — Model: {r['model']} — Input: {r['inputs'][0]}")
-        plt.figure(figsize=(10, 4))
-        plt.plot(df.index, df[r['output']], label='Actual')
-        plt.plot(df.index, r['y_pred'], '--', label='Predicted')
-        plt.legend()
-        plt.xlabel('Time')
-        plt.ylabel(r['output'])
-        st.pyplot(plt)
-        plt.close()
 
     return results, df
 
@@ -198,7 +211,7 @@ def create_pdf_report(results, df):
     pdf.set_font("Arial", size=12)
     for r in results:
         pdf.cell(0, 8, f"Output: {r['output']}", ln=1)
-        pdf.cell(0, 8, f"Input: {r['inputs'][0]}", ln=1)
+        pdf.cell(0, 8, f"Inputs: {', '.join(r['inputs'])}", ln=1)
         pdf.cell(0, 8, f"Model: {r['model']}", ln=1)
         pdf.cell(0, 8, f"R²: {r['r2']:.4f}, MSE: {r['mse']:.4f}, Gain: {r['gain']:.4f}", ln=1)
         pdf.cell(0, 8, f"Order: {r['order']}, Delay Time: {r['delay_time']:.2f}s, Process Time: {r['process_time']:.2f}s", ln=1)
@@ -226,13 +239,13 @@ def create_excel_report(results, df):
     workbook = xlsxwriter.Workbook(output)
     worksheet = workbook.add_worksheet("Summary")
 
-    headers = ["Output", "Input", "Model", "R2", "MSE", "Gain", "Order", "Delay Time (s)", "Process Time (s)", "Equation"]
+    headers = ["Output", "Inputs", "Model", "R2", "MSE", "Gain", "Order", "Delay Time (s)", "Process Time (s)", "Equation"]
     for col, header in enumerate(headers):
         worksheet.write(0, col, header)
 
     for row_num, r in enumerate(results, 1):
         worksheet.write(row_num, 0, r['output'])
-        worksheet.write(row_num, 1, r['inputs'][0])
+        worksheet.write(row_num, 1, ", ".join(r['inputs']))
         worksheet.write(row_num, 2, r['model'])
         worksheet.write(row_num, 3, r['r2'])
         worksheet.write(row_num, 4, r['mse'])
@@ -285,12 +298,11 @@ def main():
                 st.success("File loaded successfully!")
 
                 all_cols = list(df.columns)
+                st.sidebar.markdown("### Select Input Column (Single input)")
+                input_col = st.sidebar.selectbox("Input column", options=all_cols, index=0)
 
-                # Select single input
-                input_col = st.sidebar.selectbox("Select Input Column (Single)", options=all_cols)
-
-                # Select single output
-                output_col = st.sidebar.selectbox("Select Output Column (Single)", options=all_cols)
+                st.sidebar.markdown("### Select Output Column (Single output)")
+                output_col = st.sidebar.selectbox("Output column", options=all_cols, index=1 if len(all_cols)>1 else 0)
 
                 if not input_col or not output_col:
                     st.warning("Please select one input and one output column.")
@@ -317,7 +329,6 @@ def main():
 
     elif mode == "Simulated Real-time Data":
         st.write("Running simulated real-time streaming data...")
-
         total_points = st.sidebar.number_input("Total points", min_value=60, max_value=10000, value=1440)
         chunk_size = st.sidebar.number_input("Chunk size", min_value=10, max_value=1000, value=60)
 
@@ -343,11 +354,6 @@ def main():
 
         accumulated_df = pd.DataFrame()
         chunk_gen = simulate_realtime_data(total_points, chunk_size)
-
-        # Select single input and output for real-time mode (fixed for demo)
-        input_col = 'input1'
-        output_col = 'output1'
-
         for i, chunk in enumerate(chunk_gen, 1):
             st.write(f"Processing chunk {i} of {int(total_points / chunk_size)}...")
             accumulated_df = pd.concat([accumulated_df, chunk]).drop_duplicates(subset='timestamp').reset_index(drop=True)
@@ -357,7 +363,17 @@ def main():
             if len(accumulated_df) > max_points:
                 accumulated_df = accumulated_df.iloc[-max_points:]
 
-            io_relations = {output_col: [input_col]}
+            # SISO assumption: pick single input and output
+            input_cols = [c for c in accumulated_df.columns if c.lower().startswith('input')]
+            output_cols = [c for c in accumulated_df.columns if c.lower().startswith('output')]
+
+            if len(input_cols) == 0 or len(output_cols) == 0:
+                st.warning("No input or output columns found in simulated data.")
+                break
+
+            # pick first input/output for SISO
+            io_relations = {output_cols[0]: [input_cols[0]]}
+
             run_analysis_with_relations(accumulated_df, io_relations)
             time.sleep(1)
 
