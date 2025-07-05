@@ -15,7 +15,7 @@ import io
 from fpdf import FPDF
 import xlsxwriter
 
-st.set_option('deprecation.showPyplotGlobalUse', False)
+#st.set_option('deprecation.showPyplotGlobalUse', False)
 st.title("Advanced Process System Identification and Analysis")
 
 # === Transformations ===
