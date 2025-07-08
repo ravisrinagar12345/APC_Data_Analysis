@@ -6,3 +6,10 @@ scikit-learn
 scipy
 xlsxwriter
 fpdf
+streamlit
+feedparser
+vaderSentiment
+pandas
+matplotlib
+wordcloud
+streamlit-autorefresh
