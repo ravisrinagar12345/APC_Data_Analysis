@@ -1,32 +1,31 @@
-# streamlit_app.py
-
 import streamlit as st
 import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
 from sklearn.linear_model import LinearRegression
 from sklearn.preprocessing import PolynomialFeatures
-from sklearn.metrics import r2_score, mean_squared_error
+from sklearn.metrics import r2_score
 from scipy.optimize import curve_fit
+from fpdf import FPDF
+import io
+from datetime import datetime
 
 st.set_page_config(layout="wide")
-st.title("Non-linear Modeling: Valve Opening vs Process Value")
+st.title("🧠 Non-linear Modeling Tool for Valve Opening vs Process Value")
 
-# Upload data
-uploaded_file = st.file_uploader("Upload CSV with 'Opening' and 'Process' columns", type=["csv"])
+# === Upload Section ===
+uploaded_file = st.file_uploader("📁 Upload CSV with 'Opening' and 'Process' columns", type=["csv"])
+
 if uploaded_file:
     data = pd.read_csv(uploaded_file)
-    st.write("### Raw Data", data.head())
+    st.write("### 🔍 Uploaded Data Preview", data.head())
 
     if 'Opening' in data.columns and 'Process' in data.columns:
         x = data['Opening'].values.reshape(-1, 1)
         y = data['Process'].values
 
-        st.subheader("Model Comparison and Curve Fitting")
-
+        # === Model Fitting ===
         models = {}
-
-        # Linear Model
         lin_model = LinearRegression().fit(x, y)
         lin_pred = lin_model.predict(x)
         models["Linear"] = {
@@ -36,7 +35,6 @@ if uploaded_file:
             "gain": lin_model.coef_[0]
         }
 
-        # Polynomial (degree 2 and 3)
         for d in [2, 3]:
             poly = PolynomialFeatures(degree=d)
             x_poly = poly.fit_transform(x)
@@ -48,10 +46,9 @@ if uploaded_file:
                 "pred": pred,
                 "r2": r2_score(y, pred),
                 "eq": eq,
-                "gain": coeffs[1]  # First derivative approx at origin
+                "gain": coeffs[1]
             }
 
-        # Exponential Model
         try:
             def exp_func(x, a, b, c): return a * np.exp(b * x) + c
             popt, _ = curve_fit(exp_func, x.flatten(), y, maxfev=10000)
@@ -59,68 +56,111 @@ if uploaded_file:
             models["Exponential"] = {
                 "pred": exp_pred,
                 "r2": r2_score(y, exp_pred),
-                "eq": f"y = {popt[0]:.4f} * e^({popt[1]:.4f}*x) + {popt[2]:.4f}",
+                "eq": f"y = {popt[0]:.4f}*e^({popt[1]:.4f}*x)+{popt[2]:.4f}",
                 "gain": popt[0] * popt[1]
             }
         except:
-            st.warning("Exponential model failed to converge.")
+            pass
 
-        # Logarithmic Model
         try:
             def log_func(x, a, b): return a * np.log(x) + b
-            x_log = x[x > 0]
-            y_log = y[:len(x_log)]
-            popt, _ = curve_fit(log_func, x_log.flatten(), y_log)
+            valid_x = x[x > 0]
+            valid_y = y[:len(valid_x)]
+            popt, _ = curve_fit(log_func, valid_x.flatten(), valid_y)
             log_pred = log_func(x.flatten(), *popt)
             models["Logarithmic"] = {
                 "pred": log_pred,
                 "r2": r2_score(y, log_pred),
-                "eq": f"y = {popt[0]:.4f} * ln(x) + {popt[1]:.4f}",
+                "eq": f"y = {popt[0]:.4f}*ln(x) + {popt[1]:.4f}",
                 "gain": popt[0]
             }
         except:
-            st.warning("Logarithmic model failed (x must be > 0).")
+            pass
 
-        # Trigonometric Model (Sinusoidal Fit)
-        try:
-            def trig_func(x, a, b, c): return a * np.sin(b * x) + c
-            popt, _ = curve_fit(trig_func, x.flatten(), y)
-            trig_pred = trig_func(x.flatten(), *popt)
-            models["Trigonometric"] = {
-                "pred": trig_pred,
-                "r2": r2_score(y, trig_pred),
-                "eq": f"y = {popt[0]:.4f} * sin({popt[1]:.4f}*x) + {popt[2]:.4f}",
-                "gain": popt[0] * popt[1]  # Approx slope
-            }
-        except:
-            st.warning("Trigonometric model fitting failed.")
+        # === Gain Scheduling ===
+        st.subheader("📈 Gain Scheduling Visualization")
+        local_gain = np.gradient(y, x.flatten())
+        fig1, ax1 = plt.subplots()
+        ax1.plot(x, local_gain, label='Estimated Gain')
+        ax1.set_xlabel("Opening (%)")
+        ax1.set_ylabel("Gain (dy/dx)")
+        ax1.set_title("Gain vs Valve Opening")
+        ax1.grid(True)
+        st.pyplot(fig1)
 
-        # Results Table
-        st.subheader("📊 Model Summary")
+        # === Best Model Selection ===
         result_df = pd.DataFrame([
-            {
-                "Model": name,
-                "R² Score": info["r2"],
-                "Gain": round(info["gain"], 4),
-                "Equation": info["eq"]
-            }
+            {"Model": name, "R2": info['r2'], "Gain": round(info['gain'], 4), "Equation": info['eq']}
             for name, info in models.items()
-        ]).sort_values("R² Score", ascending=False)
+        ]).sort_values("R2", ascending=False)
 
+        st.subheader("🏁 Model Summary")
         st.dataframe(result_df)
+        best_model = result_df.iloc[0]['Model']
+        st.success(f"Best model: {best_model}")
 
-        # Plot best model
-        best_model = result_df.iloc[0]["Model"]
-        st.success(f"✅ Best Model: **{best_model}**")
+        # === Step Response Simulation ===
+        st.subheader("🚀 Simulated Step Response")
+        col1, col2 = st.columns(2)
+        with col1:
+            system_type = st.selectbox("System Type", ["First Order", "Second Order"])
+            K = st.number_input("Gain (K)", 1.0)
+        with col2:
+            tau = st.number_input("Time Constant (τ) [First Order]", 5.0)
+            wn = st.number_input("ωn (Second Order Natural Freq)", 1.0)
+            zeta = st.slider("ζ (Damping Ratio)", 0.0, 2.0, 0.7, 0.01)
 
-        fig, ax = plt.subplots()
-        ax.scatter(x, y, label='Data', color='black')
-        for name, info in models.items():
-            ax.plot(x.flatten(), info["pred"], label=f"{name} (R²={info['r2']:.3f})")
-        ax.set_xlabel("Valve Opening (%)")
-        ax.set_ylabel("Process Value")
-        ax.legend()
-        ax.grid(True)
-        st.pyplot(fig)
+        t = np.linspace(0, 20, 500)
+        if system_type == "First Order":
+            y_step = K * (1 - np.exp(-t / tau))
+        else:
+            wd = wn * np.sqrt(1 - zeta**2) if zeta < 1 else 0
+            y_step = 1 - np.exp(-zeta * wn * t) * (
+                np.cos(wd * t) + (zeta / np.sqrt(1 - zeta**2)) * np.sin(wd * t)) if zeta < 1 else 1 - np.exp(-wn * t)
+            y_step *= K
+
+        fig2, ax2 = plt.subplots()
+        ax2.plot(t, y_step, label=system_type)
+        ax2.set_xlabel("Time")
+        ax2.set_ylabel("Process Output")
+        ax2.grid(True)
+        ax2.set_title(f"Simulated Step Response: {system_type}")
+        st.pyplot(fig2)
+
+        # === Export PDF ===
+        def create_pdf():
+            pdf = FPDF()
+            pdf.add_page()
+            pdf.set_font("Arial", 'B', 16)
+            pdf.cell(0, 10, "Modeling Report", ln=1, align='C')
+            pdf.set_font("Arial", '', 12)
+            pdf.cell(0, 10, f"Best Model: {best_model}", ln=1)
+            pdf.multi_cell(0, 10, f"Equation: {models[best_model]['eq']}")
+            pdf.cell(0, 10, f"R²: {models[best_model]['r2']:.4f}", ln=1)
+            pdf.cell(0, 10, f"Gain: {models[best_model]['gain']:.4f}", ln=1)
+            pdf_output = io.BytesIO()
+            pdf.output(pdf_output)
+            pdf_output.seek(0)
+            return pdf_output
+
+        st.download_button("📄 Download PDF Report", create_pdf(), file_name="model_report.pdf")
+
+        # === Export Excel ===
+        def to_excel():
+            output = io.BytesIO()
+            writer = pd.ExcelWriter(output, engine='openpyxl')
+            data.to_excel(writer, index=False, sheet_name='Raw Data')
+            result_df.to_excel(writer, index=False, sheet_name='Model Summary')
+            for name, info in models.items():
+                df = pd.DataFrame({"Opening": x.flatten(), "Prediction": info['pred']})
+                df.to_excel(writer, index=False, sheet_name=name[:31])
+            writer.close()
+            output.seek(0)
+            return output
+
+        st.download_button("📊 Download Excel Report", to_excel(), file_name="model_results.xlsx")
+
     else:
-        st.error("CSV must have 'Opening' and 'Process' columns.")
+        st.error("Uploaded file must contain 'Opening' and 'Process' columns.")
+else:
+    st.info("Awaiting CSV upload...")
